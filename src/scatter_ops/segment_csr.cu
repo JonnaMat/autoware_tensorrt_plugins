@@ -24,6 +24,7 @@
 #include "autoware/scatter_ops/utils.cuh"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 
 #define THREADS 256
@@ -111,6 +112,57 @@ __global__ void segment_csr_broadcast_kernel(
     Reducer<scalar_t, REDUCE>::write(reduced_values_out + thread_idx, val, row_end - row_start);
 }
 
+// Vectorized variant of segment_csr_broadcast_kernel for the arg-free path: thread (x, y) of a
+// block owns segment `blockIdx.x * blockDim.y + threadIdx.y` and the 16-byte channel vectors
+// `threadIdx.x, threadIdx.x + blockDim.x, ...` of it (8 half or 4 float). indptr is read once per
+// thread instead of once per channel, src rows are read with 16-byte loads (a segment's rows are
+// contiguous, so the blockDim.x threads of a segment read whole rows), and the output is written
+// with 16-byte stores. Every channel goes through the same Reducer::update calls in the same row
+// order as segment_csr_broadcast_kernel, so the result is bit-identical to it (including +-0,
+// NaN, which never replaces the running value of MIN/MAX, and the 0 of an empty segment).
+template <typename scalar_t, ReductionType REDUCE>
+__global__ void segment_csr_broadcast_vec_kernel(
+  const scalar_t * __restrict__ src_in, const int64_t * __restrict__ indptr_in,
+  scalar_t * __restrict__ reduced_values_out, int64_t num_segments_in, int32_t num_vecs_in)
+{
+  constexpr int VEC = sizeof(uint4) / sizeof(scalar_t);
+  constexpr int UNROLL = 4;  // rows in flight per thread
+  const int64_t segment = static_cast<int64_t>(blockIdx.x) * blockDim.y + threadIdx.y;
+  if (segment >= num_segments_in) return;
+
+  const int64_t row_start = __ldg(indptr_in + segment);
+  const int64_t row_end = __ldg(indptr_in + segment + 1);
+  const auto * src = reinterpret_cast<const uint4 *>(src_in);
+  auto * out = reinterpret_cast<uint4 *>(reduced_values_out) + segment * num_vecs_in;
+
+  for (int32_t vec = threadIdx.x; vec < num_vecs_in; vec += blockDim.x) {
+    scalar_t val[VEC];
+#pragma unroll
+    for (int i = 0; i < VEC; i++) val[i] = Reducer<scalar_t, REDUCE>::init();
+
+    for (int64_t row = row_start; row < row_end; row += UNROLL) {
+      uint4 pack[UNROLL];
+#pragma unroll
+      for (int u = 0; u < UNROLL; u++)
+        if (row + u < row_end) pack[u] = __ldg(src + (row + u) * num_vecs_in + vec);
+#pragma unroll
+      for (int u = 0; u < UNROLL; u++)
+        if (row + u < row_end) {
+          const auto * v = reinterpret_cast<const scalar_t *>(&pack[u]);
+#pragma unroll
+          for (int i = 0; i < VEC; i++) Reducer<scalar_t, REDUCE>::update(&val[i], v[i]);
+        }
+    }
+
+    uint4 result;
+    auto * r = reinterpret_cast<scalar_t *>(&result);
+#pragma unroll
+    for (int i = 0; i < VEC; i++)
+      Reducer<scalar_t, REDUCE>::write(r + i, val[i], static_cast<int>(row_end - row_start));
+    out[vec] = result;
+  }
+}
+
 //! \todo test different devices (cudaSetDevice(src.get_device());)
 //! \todo expand index
 template <typename scalar_t, ReductionType REDUCE>
@@ -126,14 +178,27 @@ int32_t segment_csr_launch(
 
   if (out_numel == 0) return 0;
 
+  // The arg sentinel stays for cells of empty segments, which the kernels do not write. The
+  // values need no fill: both kernels write every output cell (0 for an empty MIN/MAX segment).
   if ((REDUCE == ReductionType::MIN || REDUCE == ReductionType::MAX) && arg_indices_out != nullptr)
     fill_kernel<int64_t>
       <<<BLOCKS(1, out_numel), THREADS, 0, stream_in>>>(arg_indices_out, out_numel, num_rows_in);
 
-  fill_kernel<scalar_t><<<BLOCKS(1, out_numel), THREADS, 0, stream_in>>>(
-    reduced_values_out, out_numel, static_cast<scalar_t>(0));
+  constexpr int VEC = sizeof(uint4) / sizeof(scalar_t);
+  const bool vectorizable = arg_indices_out == nullptr && num_cols_in > 1 &&
+                            num_cols_in % VEC == 0 &&
+                            reinterpret_cast<uintptr_t>(src_in) % sizeof(uint4) == 0 &&
+                            reinterpret_cast<uintptr_t>(reduced_values_out) % sizeof(uint4) == 0;
 
-  if (num_cols_in == 1)
+  if (vectorizable) {
+    const int32_t num_vecs = num_cols_in / VEC;
+    const int32_t block_x = std::min<int32_t>(num_vecs, THREADS);
+    const int32_t block_y = THREADS / block_x;
+    const dim3 block(block_x, block_y);
+    const dim3 grid((num_segments + block_y - 1) / block_y);
+    segment_csr_broadcast_vec_kernel<scalar_t, REDUCE><<<grid, block, 0, stream_in>>>(
+      src_in, indptr_in, reduced_values_out, num_segments, num_vecs);
+  } else if (num_cols_in == 1)
     segment_csr_kernel<scalar_t, REDUCE, 1><<<BLOCKS(32, num_segments), THREADS, 0, stream_in>>>(
       src_in, indptr_in, reduced_values_out, arg_indices_out, num_segments);
   else
