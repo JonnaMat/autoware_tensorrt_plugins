@@ -227,23 +227,21 @@ INSTANTIATE_TEST_SUITE_P(
     SegmentCsrCase{"ZeroColumns", 3U, 0U, {}, {0, 1, 3}}),
   segment_csr_case_name);
 
-// The launcher picks a vectorized kernel for the arg-free path when num_cols is a multiple of
-// 16 bytes worth of elements and src/out are 16-byte aligned, and the per-element kernels
-// otherwise. The cases below run every path for half and float and compare bit by bit against a
-// CPU reference that applies the reducer's update rule in row order.
+// Runs every launch path (the vectorized kernel and its fallbacks) for half and float and compares
+// bit by bit against a CPU reference.
 
 struct SegmentCsrPathCase
 {
   std::string name;
   std::size_t cols;
-  std::size_t src_offset;  // in elements; 1 breaks the 16-byte alignment of src
-  std::size_t out_offset;  // in elements; 1 breaks the 16-byte alignment of out
+  std::size_t src_offset;  // 1 misaligns src
+  std::size_t out_offset;  // 1 misaligns out
   bool with_arg;           // MAX only: request argmax indices
 };
 
 constexpr std::size_t kPathSegments = 300U;
 
-// Segment lengths cycle through empty segments and lengths around the kernel's 4-row unroll.
+// Includes empty segments and lengths around the kernel's 4-row unroll.
 std::vector<std::int64_t> make_path_indptr()
 {
   const std::vector<std::int64_t> lengths{0, 1, 2, 3, 4, 5, 0, 9, 3, 0, 8};
@@ -254,9 +252,8 @@ std::vector<std::int64_t> make_path_indptr()
   return indptr;
 }
 
-// Small integers, so that sums are exact in half and float. With `with_specials`, column 1 is
-// NaN in every row, every third column is <= 0 with -0 before +0, and other cells are NaN, -0
-// or +0 at a fixed stride.
+// Small integers, so sums are exact in half. `with_specials` mixes in NaN, -0 and +0, with
+// column 1 all NaN.
 float make_path_value(const std::size_t row, const std::size_t col, const bool with_specials)
 {
   const auto pattern = static_cast<float>(static_cast<int>((row * 7U + col * 13U) % 17U) - 8);
@@ -301,9 +298,8 @@ float to_float(const T value)
   }
 }
 
-// Same update rule as Reducer: MAX replaces the running value only on `new > current`, so NaN
-// never wins and -0 is kept over a later +0. A non-empty segment without a winner keeps the
-// reducer's init value (lowest for float, -inf for half); an empty segment yields 0.
+// Mirrors Reducer: MAX replaces only on `new > current`, so NaN never wins and -0 stays over a
+// later +0.
 template <typename T, ReductionType REDUCE>
 void make_path_reference(
   const std::vector<T> & src, const std::size_t num_rows, const std::size_t cols,
@@ -368,7 +364,7 @@ void run_segment_csr_path_case(const SegmentCsrPathCase & test_case)
   DeviceBuffer<std::int64_t> arg_d(expected_arg.size());
   copy_to_device(src_d.get() + test_case.src_offset, src);
   copy_to_device(indptr_d.get(), indptr);
-  // Poison the outputs: every cell must be written by the kernel.
+  // Poison the output: the kernel must write every cell.
   ASSERT_EQ(
     cudaMemset(out_d.get(), 0x7F, sizeof(T) * (expected_out.size() + test_case.out_offset)),
     cudaSuccess);
@@ -426,6 +422,7 @@ INSTANTIATE_TEST_SUITE_P(
   testing::Values(
     SegmentCsrPathCase{"Vectorized", 16U, 0U, 0U, false},
     SegmentCsrPathCase{"VectorizedManyVectors", 2080U, 0U, 0U, false},
+    SegmentCsrPathCase{"VectorizedOddVectorCount", 24U, 0U, 0U, false},
     SegmentCsrPathCase{"MisalignedSrcFallback", 16U, 1U, 0U, false},
     SegmentCsrPathCase{"MisalignedOutFallback", 16U, 0U, 1U, false},
     SegmentCsrPathCase{"OddColumnsFallback", 7U, 0U, 0U, false},
