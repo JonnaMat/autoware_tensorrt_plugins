@@ -227,10 +227,11 @@ INSTANTIATE_TEST_SUITE_P(
     SegmentCsrCase{"ZeroColumns", 3U, 0U, {}, {0, 1, 3}}),
   segment_csr_case_name);
 
-// The launcher picks a vectorized kernel for the arg-free path when num_cols is a multiple of
-// 16 bytes worth of elements and src/out are 16-byte aligned, and the per-element kernels
-// otherwise. The cases below run every path for half and float and compare bit by bit against a
-// CPU reference that applies the reducer's update rule in row order.
+// The launcher picks the vectorized kernel when no arg output is requested, each row splits into
+// whole 16-byte chunks (num_cols a multiple of 8 for half, 4 for float) and src/out are 16-byte
+// aligned; otherwise it falls back to the per-element kernels. The cases below run every path for
+// half and float and compare bit by bit against a CPU reference that applies the reducer's update
+// rule in row order.
 
 struct SegmentCsrPathCase
 {
@@ -426,6 +427,7 @@ INSTANTIATE_TEST_SUITE_P(
   testing::Values(
     SegmentCsrPathCase{"Vectorized", 16U, 0U, 0U, false},
     SegmentCsrPathCase{"VectorizedManyVectors", 2080U, 0U, 0U, false},
+    SegmentCsrPathCase{"VectorizedOddVectorCount", 24U, 0U, 0U, false},
     SegmentCsrPathCase{"MisalignedSrcFallback", 16U, 1U, 0U, false},
     SegmentCsrPathCase{"MisalignedOutFallback", 16U, 0U, 1U, false},
     SegmentCsrPathCase{"OddColumnsFallback", 7U, 0U, 0U, false},
