@@ -134,22 +134,18 @@ __global__ void segment_csr_broadcast_vec_kernel(
 
   for (int32_t vec = threadIdx.x; vec < num_vecs_in; vec += blockDim.x) {
     scalar_t val[kVecSize<scalar_t>];
-#pragma unroll
     for (int channel = 0; channel < kVecSize<scalar_t>; ++channel) {
       val[channel] = Reducer<scalar_t, REDUCE>::init();
     }
 
     for (int64_t row = row_start; row < row_end; row += kRowsInFlight) {
       uint4 pack[kRowsInFlight];
-#pragma unroll
       for (int ahead = 0; ahead < kRowsInFlight; ++ahead) {
         if (row + ahead < row_end) pack[ahead] = __ldg(src + (row + ahead) * num_vecs_in + vec);
       }
-#pragma unroll
       for (int ahead = 0; ahead < kRowsInFlight; ++ahead) {
         if (row + ahead < row_end) {
           const auto * values = reinterpret_cast<const scalar_t *>(&pack[ahead]);
-#pragma unroll
           for (int channel = 0; channel < kVecSize<scalar_t>; ++channel) {
             Reducer<scalar_t, REDUCE>::update(&val[channel], values[channel]);
           }
@@ -159,7 +155,6 @@ __global__ void segment_csr_broadcast_vec_kernel(
 
     uint4 result{};
     auto * reduced = reinterpret_cast<scalar_t *>(&result);
-#pragma unroll
     for (int channel = 0; channel < kVecSize<scalar_t>; ++channel) {
       Reducer<scalar_t, REDUCE>::write(
         reduced + channel, val[channel], static_cast<int>(row_end - row_start));
