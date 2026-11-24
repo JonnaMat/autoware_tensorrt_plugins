@@ -127,8 +127,8 @@ __global__ void segment_csr_broadcast_vec_kernel(
   const int64_t segment = static_cast<int64_t>(blockIdx.x) * blockDim.y + threadIdx.y;
   if (segment >= num_segments_in) return;
 
-  const int64_t row_start = __ldg(indptr_in + segment);
-  const int64_t row_end = __ldg(indptr_in + segment + 1);
+  const int64_t row_start = indptr_in[segment];
+  const int64_t row_end = indptr_in[segment + 1];
   const auto * src = reinterpret_cast<const uint4 *>(src_in);
   auto * out = reinterpret_cast<uint4 *>(reduced_values_out) + segment * num_vecs_in;
 
