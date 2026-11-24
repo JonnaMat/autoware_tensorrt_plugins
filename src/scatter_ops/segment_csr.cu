@@ -189,6 +189,9 @@ int32_t segment_csr_launch(
 
   if (vectorizable) {
     const int32_t num_vecs = num_cols_in / kVecSize<scalar_t>;
+    // Divide the segments into a grid of blocks of block_y segments each; in a block, each segment
+    // gets block_x threads, one per 16-byte vector.
+    // E.g. 64 float channels: 16 vectors, so 16 x 16 threads cover 16 segments.
     const int32_t block_x = std::min<int32_t>(num_vecs, THREADS);
     const int32_t block_y = THREADS / block_x;
     const dim3 block(block_x, block_y);
