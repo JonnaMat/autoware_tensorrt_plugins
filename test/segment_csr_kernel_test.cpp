@@ -305,8 +305,8 @@ void make_reference(
   const std::vector<T> & src, const std::size_t num_rows, const std::size_t cols,
   const std::vector<std::int64_t> & indptr, std::vector<T> & out, std::vector<std::int64_t> & arg)
 {
-  const float max_init = std::is_same_v<T, half> ? -std::numeric_limits<float>::infinity()
-                                                 : std::numeric_limits<float>::lowest();
+  constexpr float max_init = std::is_same_v<T, half> ? -std::numeric_limits<float>::infinity()
+                                                     : std::numeric_limits<float>::lowest();
   out.assign((indptr.size() - 1U) * cols, from_float<T>(0.0F));
   arg.assign(out.size(), static_cast<std::int64_t>(num_rows));
   for (std::size_t segment = 0; segment + 1U < indptr.size(); ++segment) {
@@ -314,13 +314,13 @@ void make_reference(
     const auto end = static_cast<std::size_t>(indptr[segment + 1U]);
     for (std::size_t col = 0; col < cols; ++col) {
       float value = REDUCE == MAX ? max_init : 0.0F;
-      std::int64_t best = 0;
+      std::int64_t argmax = 0;
       for (std::size_t row = start; row < end; ++row) {
         const float element = to_float(src[row * cols + col]);
         if (REDUCE == MAX) {
           if (element > value) {
             value = element;
-            best = static_cast<std::int64_t>(row);
+            argmax = static_cast<std::int64_t>(row);
           }
         } else {
           value += element;
@@ -331,7 +331,7 @@ void make_reference(
       }
       if (end > start) {
         out[segment * cols + col] = from_float<T>(value);
-        arg[segment * cols + col] = best;
+        arg[segment * cols + col] = argmax;
       }
     }
   }
