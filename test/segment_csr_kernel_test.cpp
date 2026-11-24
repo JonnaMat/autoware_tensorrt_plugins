@@ -239,14 +239,14 @@ struct SegmentCsrPathCase
   bool with_arg;           // MAX only: request argmax indices
 };
 
-constexpr std::size_t kPathSegments = 300U;
+constexpr std::size_t kNumSegments = 300U;
 
 // Includes empty segments and lengths around the kernel's 4-row unroll.
-std::vector<std::int64_t> make_path_indptr()
+std::vector<std::int64_t> make_indptr()
 {
   const std::vector<std::int64_t> lengths{0, 1, 2, 3, 4, 5, 0, 9, 3, 0, 8};
   std::vector<std::int64_t> indptr{0};
-  for (std::size_t segment = 0; segment < kPathSegments; ++segment) {
+  for (std::size_t segment = 0; segment < kNumSegments; ++segment) {
     indptr.push_back(indptr.back() + lengths[segment % lengths.size()]);
   }
   return indptr;
@@ -254,7 +254,7 @@ std::vector<std::int64_t> make_path_indptr()
 
 // Small integers, so sums are exact in half. `with_specials` mixes in NaN, -0 and +0, with
 // column 1 all NaN.
-float make_path_value(const std::size_t row, const std::size_t col, const bool with_specials)
+float make_value(const std::size_t row, const std::size_t col, const bool with_specials)
 {
   const auto pattern = static_cast<float>(static_cast<int>((row * 7U + col * 13U) % 17U) - 8);
   if (!with_specials) {
@@ -301,7 +301,7 @@ float to_float(const T value)
 // Mirrors Reducer: MAX replaces only on `new > current`, so NaN never wins and -0 stays over a
 // later +0.
 template <typename T, ReductionType REDUCE>
-void make_path_reference(
+void make_reference(
   const std::vector<T> & src, const std::size_t num_rows, const std::size_t cols,
   const std::vector<std::int64_t> & indptr, std::vector<T> & out, std::vector<std::int64_t> & arg)
 {
@@ -343,19 +343,19 @@ void run_segment_csr_path_case(const SegmentCsrPathCase & test_case)
   SKIP_TEST_IF_CUDA_UNAVAILABLE();
 
   const bool with_arg = REDUCE == MAX && test_case.with_arg;
-  const auto indptr = make_path_indptr();
+  const auto indptr = make_indptr();
   const auto num_rows = static_cast<std::size_t>(indptr.back());
   const auto cols = test_case.cols;
 
   std::vector<T> src(num_rows * cols);
   for (std::size_t row = 0; row < num_rows; ++row) {
     for (std::size_t col = 0; col < cols; ++col) {
-      src[row * cols + col] = from_float<T>(make_path_value(row, col, REDUCE == MAX));
+      src[row * cols + col] = from_float<T>(make_value(row, col, REDUCE == MAX));
     }
   }
   std::vector<T> expected_out;
   std::vector<std::int64_t> expected_arg;
-  make_path_reference<T, REDUCE>(src, num_rows, cols, indptr, expected_out, expected_arg);
+  make_reference<T, REDUCE>(src, num_rows, cols, indptr, expected_out, expected_arg);
 
   CudaStreamGuard stream;
   DeviceBuffer<T> src_d(src.size() + test_case.src_offset);
