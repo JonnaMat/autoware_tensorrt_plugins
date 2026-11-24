@@ -45,7 +45,7 @@
 
 // Number of scalar_t values in 16 bytes.
 template <typename scalar_t>
-constexpr int kVecSize = sizeof(uint4) / sizeof(scalar_t);
+constexpr int kVecSize = static_cast<int>(sizeof(uint4) / sizeof(scalar_t));
 
 template <typename scalar_t, ReductionType REDUCE, int TB>
 __global__ void segment_csr_kernel(
@@ -153,7 +153,7 @@ __global__ void segment_csr_broadcast_vec_kernel(
         }
     }
 
-    uint4 result;
+    uint4 result{};
     auto * reduced = reinterpret_cast<scalar_t *>(&result);
 #pragma unroll
     for (int channel = 0; channel < kVecSize<scalar_t>; channel++)
